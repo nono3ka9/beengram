@@ -44,5 +44,6 @@ urlpatterns = [
         name="edit_profile",
     ),
     path("search/", views.SearchView.as_view(), name="search"),
+    path("comment/<int:post_pk>", views.CommentView.as_view(), name="comment"),
     path("like/<int:pk>", views.PostLikeAPIView.as_view(), name="like"),
 ]

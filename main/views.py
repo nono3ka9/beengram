@@ -22,8 +22,10 @@ from .forms import (
     ProfileEditForm,
     SearchForm,
     SignUpForm,
+    CommentForm,
+    Comment,
 )
-from .models import Post
+from .models import Post, Comment
 
 User = get_user_model()
 
@@ -48,9 +50,61 @@ class SignUpView(CreateView):
     success_url = reverse_lazy("signup_email_send")
     form_class = SignUpForm
 
+    def form_valid(self, form):
+        user = form.save(commit=False)
+        user.is_active = False
+        user.save()
+        self.object = user
+
+        current_site = get_current_site(self.request)
+        context = {
+            "protocol": self.request.scheme,
+            "domain": current_site.domain,
+            "token": signing.dumps(user.pk),
+            "user": user,
+        }
+        subject = "[BeEngram]アカウントを有効化してください"
+        message = render_to_string(
+            "registration//email/signup_message.txt", context
+        )
+        user.email_user(subject, message)
+        return HttpResponseRedirect(self.get_success_url())
+
 
 class ActivateView(RedirectView):
-    pass
+    url = reverse_lazy("home")
+    max_age = 60 * 60 * 24
+    error_messages = {
+        "invaliud": "不正な URL です。",
+        "expire": "URL の有効期限が切れています。",
+        "user": "このユーザーは削除されたか存在していません。",
+        "activate": "ユーザー %(name)s はすでに有効化されています。"
+    }
+
+    def get(self, request, *args, **kwargs):
+        token = self.kwargs["token"]
+        try:
+            user_pk = signing.loads(token, max_age=self.max_age)
+        except signing.BadSignature:
+            return HttpResponseBadRequest(self.error_messages["invaliud"])
+        except signing.SignatureExpired:
+            return HttpResponseBadRequest(self.error_messages["expire"])
+        
+        try:
+            user = User.objects.get(pk=user_pk)
+        except User.DoesNotExist:
+            return HttpResponseBadRequest(self.error_messages["user"])
+        
+        if user.is_active:
+            return HttpResponseBadRequest(
+                self.error_messages["active"] & {"name": user.username}
+            )
+        
+        user.is_active = True
+        user.save()
+        login(self.request, user)
+
+        return super().get(request, *args, **kwargs)
 
 
 class PostView(LoginRequiredMixin, CreateView):
@@ -221,3 +275,20 @@ class PostLikeAPIView(LoginRequiredMixin, View):
         except Post.DoesNotExist:
             result = "DoesNotExist"
         return JsonResponse({"result": result})
+    
+
+class CommentView(LoginRequiredMixin, CreateView):
+    model = Comment
+    form_class = CommentForm
+    success_url = reverse_lazy("home")
+
+    def get_form_kwargs(self):
+        post = get_object_or_404(Post, pk=self.kwargs["post_pk"])
+        self.object = self.model(user=self.request.user, post=post)
+        return super().get_form_kwargs()
+    
+    def form_valid(self, form):
+        form.instance.user = self.request.user
+        form.instance.post = get_object_or_404(Post, pk=self.kwargs["post_pk"])
+        return super().form_valid(form)
+    
